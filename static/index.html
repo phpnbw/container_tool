@@ -1,0 +1,996 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <title>Docker配置编辑器</title>
+    <link rel="icon" href="/container_tool/staticn.svg" type="image/svg+xml">
+    <link rel="stylesheet" href="https://unpkg.com/element-ui/lib/theme-chalk/index.css">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.2/codemirror.min.css">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.2/theme/monokai.min.css">
+    <style>
+        body {
+            margin: 0;
+            padding: 0;
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+        }
+        .login-container {
+            max-width: 400px;
+            margin: 100px auto;
+            padding: 20px;
+            border-radius: 4px;
+            box-shadow: 0 2px 12px 0 rgba(0,0,0,0.1);
+        }
+        .main-container {
+            height: 100vh;
+            display: flex;
+            flex-direction: column;
+        }
+        .toolbar {
+            padding: 10px;
+            background-color: #f5f7fa;
+            border-bottom: 1px solid #e6e6e6;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+        .content {
+            display: flex;
+            height: calc(100vh - 52px);
+            overflow: hidden; /* 防止溢出 */
+        }
+        .sidebar {
+            width: 300px;
+            border-right: 1px solid #e6e6e6;
+            overflow-y: auto;
+            flex-shrink: 0; /* 防止侧边栏被压缩 */
+            height: 100%;
+        }
+        .editor-panel {
+            flex: 1;
+            padding: 10px;
+            display: flex;
+            flex-direction: column;
+            overflow: hidden; /* 防止溢出 */
+            height: 100%;
+            min-width: 200px; /* 确保编辑区域有最小宽度 */
+        }
+        /* 拖拽分隔条样式 */
+        .resizer {
+            width: 10px;
+            background-color: #e0e0e0;
+            cursor: col-resize;
+            margin: 0;
+            z-index: 100;
+            position: relative;
+            transition: background-color 0.2s;
+        }
+        .resizer:hover, .resizer.dragging {
+            background-color: #aaa;
+            width: 10px;
+        }
+        /* 拖拽时的覆盖层，防止选中文本 */
+        .resize-overlay {
+            position: fixed;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            z-index: 1000;
+            display: none;
+        }
+        .resize-overlay.active {
+            display: block;
+        }
+        .file-path {
+            margin: 0 0 10px 0;
+            font-size: 14px;
+            color: #666;
+        }
+        .editor-wrapper {
+            flex: 1;
+            border: 1px solid #ddd;
+            margin-bottom: 10px;
+            min-height: 400px;
+            max-height: calc(100vh - 150px);
+        }
+        .buttons {
+            display: flex;
+            justify-content: space-between;
+        }
+        .status {
+            color: #666;
+            font-size: 12px;
+        }
+        .CodeMirror {
+            height: 100% !important;
+            font-size: 14px;
+        }
+        /* 自定义树节点样式 */
+        .custom-tree-node {
+            display: flex;
+            align-items: center;
+            font-size: 14px;
+        }
+        .node-icon {
+            margin-right: 5px;
+            font-size: 16px;
+        }
+        .file-icon {
+            color: #409EFF;
+        }
+        .folder-icon {
+            color: #E6A23C;
+        }
+        .container-icon {
+            color: #67C23A;
+        }
+        .symlink-icon {
+            color: #909399;
+        }
+        /* 容器操作菜单 */
+        .container-actions {
+            display: flex;
+            align-items: center;
+            margin-left: auto;
+        }
+        .container-actions .el-button {
+            padding: 2px 5px;
+            margin-left: 5px;
+        }
+        .ssh-info {
+            display: flex;
+            align-items: center;
+            gap: 15px;
+        }
+        .ssh-info span {
+            color: #606266;
+            font-size: 14px;
+        }
+        /* 文件操作按钮样式 */
+        .file-actions {
+            margin-bottom: 10px;
+            display: flex;
+            gap: 10px;
+        }
+        /* 树节点悬停按钮 */
+        .tree-node-actions {
+            visibility: hidden;
+            opacity: 0;
+            transition: opacity 0.2s;
+            margin-left: auto;
+            display: flex;
+            align-items: center;
+        }
+        /* 修改为将按钮放在前面 */
+        .tree-node-actions-left {
+            visibility: hidden;
+            opacity: 0;
+            transition: opacity 0.2s;
+            margin-right: 5px;
+            display: flex;
+            align-items: center;
+        }
+        .custom-tree-node:hover .tree-node-actions-left {
+            visibility: visible;
+            opacity: 1;
+        }
+        .tree-node-actions-left .el-button {
+            padding: 2px 5px;
+            margin-left: 3px;
+        }
+        /* 按钮图标大小 */
+        .action-icon {
+            font-size: 14px;
+        }
+    </style>
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/xterm@5.1.0/css/xterm.min.css">
+</head>
+<body>
+    <div id="app">
+        <!-- 登录表单 -->
+        <div class="login-container" v-if="!isLoggedIn">
+            <h2 style="text-align: center; margin-bottom: 20px;">Docker配置编辑器</h2>
+            <el-form :model="loginForm" :rules="loginRules" ref="loginForm">
+                <el-form-item prop="host">
+                    <el-input v-model="loginForm.host" placeholder="服务器地址"></el-input>
+                </el-form-item>
+                <el-form-item prop="port">
+                    <el-input v-model="loginForm.port" placeholder="SSH端口"></el-input>
+                </el-form-item>
+                <el-form-item prop="username">
+                    <el-input v-model="loginForm.username" placeholder="用户名"></el-input>
+                </el-form-item>
+                <el-form-item prop="password">
+                    <el-input v-model="loginForm.password" type="password" placeholder="密码"></el-input>
+                </el-form-item>
+                <el-form-item>
+                    <el-checkbox v-model="rememberMe">记住登录信息</el-checkbox>
+                </el-form-item>
+                <el-form-item>
+                    <el-button type="primary" @click="login" style="width: 100%">登录</el-button>
+                </el-form-item>
+            </el-form>
+        </div>
+
+        <!-- 主界面 -->
+        <div class="main-container" v-else>
+            <div class="toolbar">
+                <el-button-group>
+                    <el-button size="small" @click="refreshContainers">刷新容器</el-button>
+                    <el-button size="small" @click="logout">退出登录</el-button>
+                </el-button-group>
+                <div class="ssh-info">
+                    <span>当前连接: {{ loginForm.host }}</span>
+                    <el-button 
+                        type="primary" 
+                        size="small" 
+                        icon="el-icon-terminal"
+                        @click="openHostTerminal">
+                        宿主机终端
+                    </el-button>
+                </div>
+            </div>
+            <div class="content">
+                <div class="sidebar" ref="sidebar">
+                    <el-tree
+                        ref="fileTree"
+                        :data="containers"
+                        node-key="uniqueId"
+                        :expand-on-click-node="true"
+                        :props="treeProps"
+                        @node-click="handleNodeClick"
+                        @node-expand="handleNodeExpand">
+                        <template slot-scope="{ node, data }">
+                            <div class="custom-tree-node">
+                                <!-- 容器和文件的操作按钮，放在文本前面 -->
+                                <div class="tree-node-actions-left">
+                                    <!-- 容器终端按钮 -->
+                                    <el-button 
+                                        v-if="data.isContainer"
+                                        type="primary" 
+                                        size="mini" 
+                                        icon="el-icon-terminal"
+                                        @click.stop="openTerminal(data)"
+                                        circle>
+                                    </el-button>
+                                    
+                                    <!-- 目录上传按钮 -->
+                                    <el-button 
+                                        v-if="!data.isContainer && data.type === 'directory'"
+                                        type="warning" 
+                                        size="mini" 
+                                        icon="el-icon-upload"
+                                        @click.stop="uploadToPath(data)"
+                                        circle>
+                                    </el-button>
+                                    
+                                    <!-- 文件下载按钮 -->
+                                    <el-button 
+                                        v-if="!data.isContainer && data.type === 'file'"
+                                        type="success" 
+                                        size="mini" 
+                                        icon="el-icon-download"
+                                        @click.stop="downloadFile(data)"
+                                        circle>
+                                    </el-button>
+                                </div>
+                                <i v-if="data.isContainer" class="el-icon-cpu node-icon container-icon"></i>
+                                <i v-else-if="data.type === 'directory'" class="el-icon-folder node-icon folder-icon"></i>
+                                <i v-else-if="data.type === 'symlink'" class="el-icon-link node-icon symlink-icon"></i>
+                                <i v-else class="el-icon-document node-icon file-icon"></i>
+
+                                <span>{{ node.label }}</span>
+                            </div>
+                        </template>
+                    </el-tree>
+                </div>
+                <!-- 添加可拖拽分隔条 -->
+                <div class="resizer" ref="resizer"></div>
+                <div class="editor-panel">
+                    <h3 class="file-path" v-if="currentFilePath">{{ currentFilePath }}</h3>
+                    <div class="file-actions" v-if="currentFile && currentFile.type === 'directory'">
+                        <el-button size="small" type="primary" @click="uploadToCurrentDirectory">
+                            <i class="el-icon-upload"></i> 上传文件
+                        </el-button>
+                    </div>
+                    <div class="file-actions" v-if="currentFile && currentFile.type === 'file'">
+                        <el-button size="small" type="success" @click="downloadCurrentFile">
+                            <i class="el-icon-download"></i> 下载文件
+                        </el-button>
+                    </div>
+                    <div class="editor-wrapper" ref="editorContainer"></div>
+                    <div class="buttons">
+                        <span class="status">{{ status }}</span>
+                        <el-button type="primary" @click="saveFile" :disabled="!currentFilePath">保存</el-button>
+                    </div>
+                </div>
+            </div>
+            
+            <!-- 添加覆盖层，拖拽时防止选中文本 -->
+            <div class="resize-overlay" ref="overlay"></div>
+        </div>
+        
+        <!-- 隐藏的文件上传输入 -->
+        <input 
+            type="file" 
+            ref="uploadInput" 
+            style="display: none;" 
+            @change="handleFileUpload"
+        >
+    </div>
+
+    <script src="https://unpkg.com/vue@2.6.14/dist/vue.js"></script>
+    <script src="https://unpkg.com/element-ui/lib/index.js"></script>
+    <script src="https://unpkg.com/axios/dist/axios.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.2/codemirror.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.2/mode/yaml/yaml.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.2/mode/javascript/javascript.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/xterm@5.1.0/lib/xterm.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/xterm-addon-fit@0.7.0/lib/xterm-addon-fit.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/xterm-addon-web-links@0.8.0/lib/xterm-addon-web-links.min.js"></script>
+    <script>
+        new Vue({
+            el: '#app',
+            data: {
+                isLoggedIn: false,
+                loginForm: {
+                    host: 'localhost',
+                    port: '22',
+                    username: 'root',
+                    password: ''
+                },
+                rememberMe: true, // 默认记住登录信息
+                loginRules: {
+                    host: [{ required: true, message: '请输入服务器地址', trigger: 'blur' }],
+                    port: [{ required: true, message: '请输入SSH端口', trigger: 'blur' }],
+                    username: [{ required: true, message: '请输入用户名', trigger: 'blur' }],
+                    password: [{ required: true, message: '请输入密码', trigger: 'blur' }]
+                },
+                containers: [],
+                currentFilePath: '',
+                currentContainerId: '',
+                currentFile: null,
+                editor: null,
+                status: '准备就绪',
+                
+                // 侧边栏宽度
+                sidebarWidth: 300,
+                treeProps: {
+                    label: 'name',
+                    children: 'children',
+                    isLeaf: function(data) {
+                        if (data.isContainer) return false;
+                        if (data.type) {
+                            return data.type === 'file';
+                        }
+                        return !(data.children && Array.isArray(data.children));
+                    }
+                },
+                isLoadingFile: false,
+                isDragging: false,
+                uploadTargetPath: '', // 用于文件上传的目标路径
+                uploading: false,     // 上传状态
+            },
+            mounted() {
+                console.log('Vue 实例已挂载');
+                // 从本地存储加载登录信息
+                this.loadLoginInfoFromStorage();
+            },
+            methods: {
+                // 从本地存储加载登录信息
+                loadLoginInfoFromStorage() {
+                    const savedLoginInfo = localStorage.getItem('dockerEditorLoginInfo');
+                    if (savedLoginInfo) {
+                        try {
+                            const loginInfo = JSON.parse(savedLoginInfo);
+                            // 只填充非敏感信息或有记住密码时的完整信息
+                            this.loginForm.host = loginInfo.host || this.loginForm.host;
+                            this.loginForm.port = loginInfo.port || this.loginForm.port;
+                            this.loginForm.username = loginInfo.username || this.loginForm.username;
+                            
+                            // 只有在rememberPassword为true时才填充密码
+                            if (loginInfo.rememberPassword) {
+                                this.loginForm.password = loginInfo.password || '';
+                                // 设置记住我选项
+                                this.rememberMe = true;
+                                
+                                // 可选：自动登录
+                                this.$nextTick(() => {
+                                    this.login();
+                                });
+                            }
+                        } catch (e) {
+                            console.error('解析存储的登录信息失败:', e);
+                            // 出错时清除存储的信息
+                            localStorage.removeItem('dockerEditorLoginInfo');
+                        }
+                    }
+                },
+                
+                // 保存登录信息到本地存储
+                saveLoginInfoToStorage() {
+                    if (this.rememberMe) {
+                        const loginInfo = {
+                            host: this.loginForm.host,
+                            port: this.loginForm.port,
+                            username: this.loginForm.username,
+                            password: this.loginForm.password,
+                            rememberPassword: true
+                        };
+                        localStorage.setItem('dockerEditorLoginInfo', JSON.stringify(loginInfo));
+                    } else {
+                        // 如果未勾选记住我，则不保存任何信息
+                        localStorage.removeItem('dockerEditorLoginInfo');
+                    }
+                },
+                
+                // 修改登出方法，清除本地存储
+                logout() {
+                    this.isLoggedIn = false;
+                    this.containers = [];
+                    this.currentFilePath = '';
+                    this.currentContainerId = '';
+                    this.status = '已退出登录';
+                    if (this.editor) {
+                        this.editor.toTextArea();
+                        this.editor = null;
+                    }
+                    
+                    // 清除本地存储的登录信息
+                    localStorage.removeItem('dockerEditorLoginInfo');
+                    
+                    // 重置登录表单为默认值
+                    this.loginForm = {
+                        host: 'localhost',
+                        port: '22',
+                        username: 'root',
+                        password: ''
+                    };
+                },
+                initResizer() {
+                    const resizer = this.$refs.resizer;
+                    const sidebar = this.$refs.sidebar;
+                    const overlay = this.$refs.overlay;
+                    
+                    if (!resizer || !sidebar || !overlay) {
+                        console.error('无法找到分隔条、侧边栏或覆盖层元素');
+                        return;
+                    }
+                    
+                    console.log('初始化分隔条拖拽功能');
+                    
+                    let startX, startWidth;
+                    
+                    const startDrag = (e) => {
+                        console.log('开始拖拽');
+                        startX = e.clientX;
+                        startWidth = parseInt(getComputedStyle(sidebar).width, 10);
+                        
+                        // 标记拖拽状态
+                        resizer.classList.add('dragging');
+                        overlay.classList.add('active');
+                        
+                        // 添加事件监听
+                        document.addEventListener('mousemove', drag);
+                        document.addEventListener('mouseup', stopDrag);
+                        
+                        // 阻止默认行为和冒泡
+                        e.preventDefault();
+                        e.stopPropagation();
+                    };
+                    
+                    const drag = (e) => {
+                        const width = startWidth + e.clientX - startX;
+                        
+                        // 设置最小宽度和最大宽度
+                        const minWidth = 150;
+                        const maxWidth = window.innerWidth * 0.8;
+                        
+                        if (width >= minWidth && width <= maxWidth) {
+                            this.sidebarWidth = width;
+                            sidebar.style.width = width + 'px';
+                            
+                            // 如果编辑器已初始化，刷新它
+                            if (this.editor) {
+                                this.editor.refresh();
+                            }
+                        }
+                    };
+                    
+                    const stopDrag = () => {
+                        console.log('停止拖拽');
+                        // 取消拖拽状态
+                        resizer.classList.remove('dragging');
+                        overlay.classList.remove('active');
+                        
+                        // 移除事件监听
+                        document.removeEventListener('mousemove', drag);
+                        document.removeEventListener('mouseup', stopDrag);
+                        
+                        // 保存宽度到本地存储
+                        localStorage.setItem('sidebarWidth', this.sidebarWidth);
+                    };
+                    
+                    // 移除现有事件监听器（如果有）以避免重复绑定
+                    resizer.removeEventListener('mousedown', startDrag);
+                    
+                    // 绑定鼠标按下事件
+                    resizer.addEventListener('mousedown', startDrag);
+                    console.log('已绑定拖拽事件监听器');
+                    
+                    // 尝试从本地存储加载宽度
+                    const savedWidth = localStorage.getItem('sidebarWidth');
+                    if (savedWidth) {
+                        this.sidebarWidth = parseInt(savedWidth, 10);
+                        sidebar.style.width = this.sidebarWidth + 'px';
+                        console.log('已从本地存储加载侧边栏宽度:', this.sidebarWidth);
+                    }
+                },
+                
+                isFile(data) {
+                    if (!data.path) return false;
+                    // 使用后端返回的类型字段判断
+                    if (data.type) {
+                        return data.type === 'file';
+                    }
+                    // 没有type字段时，回退到使用children属性判断
+                    return !(data.children && Array.isArray(data.children));
+                },
+                login() {
+                    console.log('尝试登录:', this.loginForm);
+                    this.$refs.loginForm.validate(valid => {
+                        if (valid) {
+                            this.status = '正在登录...';
+                            axios.post('/api/login', this.loginForm)
+                                .then(response => {
+                                    console.log('登录响应:', response.data);
+                                    if (response.data.success) {
+                                        // 保存登录信息到本地存储
+                                        this.saveLoginInfoToStorage();
+                                        
+                                        this.isLoggedIn = true;
+                                        this.refreshContainers();
+                                        this.$nextTick(() => {
+                                            this.initEditor();
+                                            // 登录成功后初始化分隔条
+                                            this.initResizer();
+                                        });
+                                    } else {
+                                        this.$message.error(response.data.message || '登录失败');
+                                    }
+                                })
+                                .catch(error => {
+                                    console.error('登录错误:', error);
+                                    this.$message.error(error.message || '登录请求失败');
+                                    this.status = '登录失败';
+                                });
+                        }
+                    });
+                },
+                initEditor() {
+                    this.$nextTick(() => {
+                        const container = this.$refs.editorContainer;
+                        if (!container) {
+                            console.error('找不到编辑器容器');
+                            return;
+                        }
+                        
+                        container.innerHTML = '';
+                        const textarea = document.createElement('textarea');
+                        container.appendChild(textarea);
+                        
+                        this.editor = CodeMirror.fromTextArea(textarea, {
+                            mode: 'yaml',
+                            theme: 'monokai',
+                            lineNumbers: true,
+                            lineWrapping: true,
+                            matchBrackets: true
+                        });
+                        
+                        console.log('编辑器已初始化');
+                        this.status = '编辑器已就绪';
+                        
+                        // 确保编辑器正确渲染
+                        setTimeout(() => {
+                            if (this.editor) {
+                                this.editor.refresh();
+                            }
+                        }, 100);
+                    });
+                },
+                refreshContainers() {
+                    this.status = '正在加载容器列表...';
+                    axios.get('/api/containers')
+                        .then(response => {
+                            console.log('容器列表:', response.data);
+                            if (response.data.success) {
+                                this.containers = response.data.data.map((container, index) => ({
+                                    ...container,
+                                    isContainer: true,
+                                    uniqueId: 'container_' + container.containerId,
+                                    children: []  // 初始化为空数组，表示可以展开
+                                }));
+                                this.status = '已加载 ' + this.containers.length + ' 个容器';
+                            } else {
+                                this.$message.error(response.data.message || '加载容器失败');
+                                this.status = '加载容器失败';
+                            }
+                        })
+                        .catch(error => {
+                            console.error('获取容器错误:', error);
+                            this.$message.error(error.message || '获取容器列表失败');
+                            this.status = '获取容器列表失败';
+                        });
+                },
+                handleNodeClick(data) {
+                    console.log('节点点击:', data);
+                    console.log('是否是文件:', this.isFile(data));
+                    console.log('children属性:', data.children);
+                    console.log('节点类型:', data.type);
+                    
+                    this.currentFile = data;
+                    
+                    if (data.isContainer) {
+                        // 容器节点，如果未加载过，则加载子内容
+                        if (data.children && data.children.length === 0) {
+                            this.loadContainerRootFiles(data);
+                        }
+                        return;
+                    }
+                    
+                    this.currentContainerId = data.containerId;
+                    this.currentFilePath = data.path;
+                    
+                    // 首先根据type属性判断是否为目录
+                    if (data.type === 'directory' || data.type === 'symlink') {
+                        // 如果是目录或符号链接，确保有children属性
+                        if (!data.children) {
+                            this.$set(data, 'children', []);
+                        }
+                        
+                        // 如果目录内容未加载过（children为空），则加载目录内容
+                        if (data.children.length === 0) {
+                            this.loadDirectoryContent(data);
+                        }
+                        this.status = '已选择目录: ' + data.path;
+                        return;
+                    }
+                    
+                    // 不是容器也不是目录，则视为文件加载内容
+                    this.loadFileContent();
+                },
+                handleNodeExpand(data, node) {
+                    console.log('节点展开:', data, node);
+                    console.log('节点类型:', data.type);
+                    
+                    if (data.isContainer) {
+                        // 容器节点展开，加载根目录内容
+                        if (data.children && data.children.length === 0) {
+                            this.loadContainerRootFiles(data);
+                        }
+                    } else if ((data.type === 'directory' || data.type === 'symlink')) {
+                        // 确保目录节点有children属性
+                        if (!data.children) {
+                            this.$set(data, 'children', []);
+                        }
+                        
+                        // 如果目录内容未加载过（children为空），则加载目录内容
+                        if (data.children.length === 0) {
+                            this.loadDirectoryContent(data);
+                        }
+                    }
+                },
+                loadContainerRootFiles(containerNode) {
+                    this.status = '正在加载容器文件...';
+                    const containerId = containerNode.containerId;
+                    
+                    axios.get(`/api/container/${containerId}/files`)
+                        .then(response => {
+                            console.log('容器文件响应:', response.data);
+                            if (response.data.success) {
+                                const files = response.data.data || [];
+                                // 处理文件节点
+                                const processedFiles = files.map(file => {
+                                    // 确保每个节点都有containerId
+                                    if (!file.containerId) {
+                                        file.containerId = containerId;
+                                    }
+                                    
+                                    // 添加唯一ID
+                                    file.uniqueId = `${containerId}_${file.path}`;
+                                    
+                                    // 根据type属性设置children
+                                    if (file.type === 'directory' || file.type === 'symlink') {
+                                        if (!file.children || !Array.isArray(file.children)) {
+                                            file.children = [];
+                                        }
+                                    } else if (file.children === undefined) {
+                                        // 兼容旧版逻辑：尝试通过路径判断是否为目录
+                                        if (Array.isArray(response.data.data) && response.data.data.some(
+                                            item => item.path && item.path.startsWith(file.path + '/'))) {
+                                            file.children = [];
+                                            // 推断这是一个目录，设置type
+                                            file.type = 'directory';
+                                        }
+                                    }
+                                    
+                                    // 添加日志查看处理后的节点
+                                    console.log('处理后的根目录节点:', file.path, '类型:', file.type, '是否有children:', file.children && Array.isArray(file.children));
+                                    
+                                    return file;
+                                });
+                                
+                                // 更新容器节点的子节点
+                                this.$set(containerNode, 'children', processedFiles);
+                                this.status = '已加载容器文件';
+                            } else {
+                                this.$message.error(response.data.message || '加载容器文件失败');
+                                this.status = '加载容器文件失败';
+                            }
+                        })
+                        .catch(error => {
+                            console.error('加载容器文件错误:', error);
+                            this.$message.error(error.message || '加载容器文件失败');
+                            this.status = '加载容器文件失败';
+                        });
+                },
+                loadDirectoryContent(dirNode) {
+                    this.status = '正在加载目录内容...';
+                    console.log('加载目录内容:', dirNode.path, '节点类型:', dirNode.type);
+                    
+                    const containerId = dirNode.containerId;
+                    const path = dirNode.path;
+                    
+                    axios.get(`/api/container/${containerId}/file`, {
+                        params: { path: path }
+                    })
+                    .then(response => {
+                        console.log('目录内容响应:', response.data);
+                        if (response.data.success && Array.isArray(response.data.data)) {
+                            const children = response.data.data.map(item => {
+                                // 确保每个节点都有containerId
+                                if (!item.containerId) {
+                                    item.containerId = containerId;
+                                }
+                                
+                                // 添加唯一ID
+                                item.uniqueId = `${containerId}_${item.path}`;
+                                
+                                // 根据type属性设置children
+                                if (item.type === 'directory' || item.type === 'symlink') {
+                                    if (!item.children || !Array.isArray(item.children)) {
+                                        item.children = [];
+                                    }
+                                }
+                                
+                                // 添加日志查看处理后的节点
+                                console.log('处理后的节点:', item.path, '类型:', item.type, '是否有children:', item.children && Array.isArray(item.children));
+                                
+                                return item;
+                            });
+                            
+                            // 更新目录节点的子节点
+                            this.$set(dirNode, 'children', children);
+                            this.status = '已加载目录内容: ' + dirNode.path;
+                        } else {
+                            this.$message.error(response.data.message || '加载目录内容失败');
+                            this.status = '加载目录内容失败';
+                        }
+                    })
+                    .catch(error => {
+                        console.error('加载目录内容错误:', error);
+                        this.$message.error(error.message || '加载目录内容失败');
+                        this.status = '加载目录内容失败';
+                    });
+                },
+                loadFileContent() {
+                    this.status = '正在加载文件内容...';
+                    axios.get(`/api/container/${this.currentContainerId}/file`, {
+                        params: { path: this.currentFilePath }
+                    })
+                    .then(response => {
+                        console.log('文件内容响应:', response.data);
+                        if (response.data.success) {
+                            if (Array.isArray(response.data.data)) {
+                                // 这是一个目录，不应该走到这里
+                                this.status = '这是一个目录，无内容可显示';
+                                if (this.editor) {
+                                    this.editor.setValue('');
+                                }
+                            } else {
+                                // 这是一个文件
+                                const content = typeof response.data.data === 'string'
+                                    ? response.data.data
+                                    : JSON.stringify(response.data.data, null, 2);
+                                
+                                if (this.editor) {
+                                    this.editor.setValue(content);
+                                    this.editor.refresh();
+                                    
+                                    // 设置编辑器模式
+                                    const ext = this.currentFilePath.split('.').pop().toLowerCase();
+                                    if (ext === 'json' || ext === 'js') {
+                                        this.editor.setOption('mode', {name: 'javascript', json: ext === 'json'});
+                                    } else if (ext === 'yml' || ext === 'yaml') {
+                                        this.editor.setOption('mode', 'yaml');
+                                    }
+                                }
+                                
+                                this.status = '已加载文件: ' + this.currentFilePath;
+                            }
+                        } else {
+                            this.$message.error(response.data.message || '加载文件内容失败');
+                            this.status = '加载文件内容失败';
+                        }
+                    })
+                    .catch(error => {
+                        console.error('加载文件内容错误:', error);
+                        this.$message.error(error.message || '加载文件内容失败');
+                        this.status = '加载文件内容失败';
+                    });
+                },
+                saveFile() {
+                    if (!this.currentFilePath || !this.currentContainerId || !this.editor) {
+                        this.$message.error('未选择文件或编辑器未初始化');
+                        return;
+                    }
+                    
+                    const content = this.editor.getValue();
+                    this.status = '正在保存文件...';
+                    
+                    this.$confirm('确认保存文件?', '提示', {
+                        confirmButtonText: '确定',
+                        cancelButtonText: '取消',
+                        type: 'warning'
+                    }).then(() => {
+                        axios.post(`/api/container/${this.currentContainerId}/file`, {
+                            path: this.currentFilePath,
+                            content: content
+                        })
+                        .then(response => {
+                            console.log('保存响应:', response.data);
+                            if (response.data.success) {
+                                this.$message.success('保存成功');
+                                this.status = '保存成功';
+                            } else {
+                                this.$message.error(response.data.message || '保存失败');
+                                this.status = '保存失败: ' + response.data.message;
+                            }
+                        })
+                        .catch(error => {
+                            console.error('保存错误:', error);
+                            this.$message.error(error.message || '保存文件失败');
+                            this.status = '保存错误: ' + error.message;
+                        });
+                    }).catch(() => {
+                        this.$message.info('已取消保存');
+                        this.status = '已取消保存';
+                    });
+                },
+                // 打开终端
+                openTerminal(container) {
+                    const protocol = window.location.protocol;
+                    const host = window.location.host;
+                    // 使用URL参数传递容器ID和名称
+                    const url = `${protocol}//${host}/static/terminal.html?type=container&id=${encodeURIComponent(container.containerId)}&name=${encodeURIComponent(container.name)}`;
+                    // 在新标签页中打开
+                    window.open(url, '_blank');
+                },
+                
+                // 打开宿主机终端
+                openHostTerminal() {
+                    const protocol = window.location.protocol;
+                    const host = window.location.host;
+                    // 使用URL参数传递主机信息
+                    const url = `${protocol}//${host}/static/terminal.html?type=host&host=${encodeURIComponent(this.loginForm.host)}`;
+                    // 在新标签页中打开
+                    window.open(url, '_blank');
+                },
+                // 上传文件到指定路径
+                uploadToPath(node) {
+                    this.uploadTargetPath = node.path;
+                    this.$refs.uploadInput.click();
+                },
+                
+                // 上传文件到当前目录
+                uploadToCurrentDirectory() {
+                    if (this.currentFile && this.currentFile.type === 'directory') {
+                        this.uploadTargetPath = this.currentFilePath;
+                        this.$refs.uploadInput.click();
+                    }
+                },
+                
+                // 处理文件上传
+                handleFileUpload(event) {
+                    const file = event.target.files[0];
+                    if (!file) return;
+                    
+                    // 创建表单数据
+                    const formData = new FormData();
+                    formData.append('file', file);
+                    formData.append('path', this.uploadTargetPath + '/' + file.name);
+                    
+                    // 显示上传进度
+                    this.uploading = true;
+                    this.$message({
+                        message: '正在上传文件...',
+                        type: 'info'
+                    });
+                    
+                    // 发送上传请求
+                    axios.post(`/api/container/${this.currentContainerId}/upload`, formData, {
+                        headers: {
+                            'Content-Type': 'multipart/form-data'
+                        }
+                    })
+                    .then(response => {
+                        if (response.data.success) {
+                            this.$message.success('文件上传成功');
+                            // 刷新当前目录
+                            if (this.currentFile && this.currentFile.type === 'directory') {
+                                // 重新加载目录内容
+                                this.loadDirectoryContent(this.currentFile);
+                            } else {
+                                // 刷新当前选择的父目录
+                                this.refreshCurrentDirectory();
+                            }
+                        } else {
+                            this.$message.error('上传失败: ' + response.data.message);
+                        }
+                    })
+                    .catch(error => {
+                        console.error('上传错误:', error);
+                        this.$message.error('上传失败: ' + (error.response ? error.response.data.message : error.message));
+                    })
+                    .finally(() => {
+                        this.uploading = false;
+                        // 清空文件输入，以便可以再次选择同一文件
+                        this.$refs.uploadInput.value = '';
+                    });
+                },
+                
+                // 刷新当前目录
+                refreshCurrentDirectory() {
+                    // 找到当前文件所在的目录节点
+                    if (this.currentFile && this.currentFile.path) {
+                        const dirPath = this.currentFile.path.substring(0, this.currentFile.path.lastIndexOf('/'));
+                        // 查找目录节点
+                        const node = this.$refs.fileTree.store.nodesMap[this.currentContainerId + '_' + dirPath];
+                        if (node && node.node) {
+                            node.node.loaded = false;
+                        }
+                        
+                        // 尝试刷新容器根目录
+                        const containerNode = this.containers.find(c => c.containerId === this.currentContainerId);
+                        if (containerNode) {
+                            this.loadContainerRootFiles(containerNode);
+                        }
+                    }
+                },
+                
+                // 下载当前文件
+                downloadCurrentFile() {
+                    if (this.currentFile && this.currentFile.type === 'file') {
+                        this.downloadFile(this.currentFile);
+                    }
+                },
+                
+                // 下载指定文件
+                downloadFile(node) {
+                    if (node.type !== 'file') return;
+                    
+                    const url = `/api/container/${node.containerId}/download?path=${encodeURIComponent(node.path)}`;
+                    
+                    // 创建一个隐藏的a标签并触发点击
+                    const link = document.createElement('a');
+                    link.href = url;
+                    link.setAttribute('download', node.name);
+                    document.body.appendChild(link);
+                    link.click();
+                    document.body.removeChild(link);
+                },
+            }
+        });
+    </script>
+</body>
+</html> 

@@ -1,0 +1,238 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <title>容器终端</title>
+    <link rel="icon" href="/container_tool/staticn.svg" type="image/svg+xml">
+    <style>
+        body {
+            margin: 0;
+            padding: 0;
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+            background-color: #000;
+            height: 100vh;
+            overflow: hidden;
+            display: flex;
+            flex-direction: column;
+        }
+        .terminal-header {
+            color: white;
+            background-color: #333;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 10px 15px;
+            box-shadow: 0 1px 3px rgba(0,0,0,0.3);
+        }
+        .terminal-title {
+            font-size: 16px;
+            font-weight: bold;
+        }
+        .close-button {
+            background-color: #f56c6c;
+            color: white;
+            border: none;
+            border-radius: 4px;
+            padding: 5px 10px;
+            font-size: 14px;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+        }
+        .close-button:hover {
+            background-color: #e64545;
+        }
+        #terminal {
+            flex: 1;
+            background-color: #000;
+            padding: 5px;
+            overflow: hidden;
+        }
+        .xterm-viewport::-webkit-scrollbar {
+            width: 8px;
+        }
+        .xterm-viewport::-webkit-scrollbar-track {
+            background: #222;
+        }
+        .xterm-viewport::-webkit-scrollbar-thumb {
+            background: #555;
+            border-radius: 4px;
+        }
+    </style>
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/xterm@5.1.0/css/xterm.min.css">
+</head>
+<body>
+    <div class="terminal-header">
+        <div class="terminal-title" id="terminal-title">终端连接</div>
+        <button class="close-button" onclick="closeTerminal()">
+            <span>关闭</span>
+        </button>
+    </div>
+    <div id="terminal"></div>
+
+    <script src="https://cdn.jsdelivr.net/npm/xterm@5.1.0/lib/xterm.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/xterm-addon-fit@0.7.0/lib/xterm-addon-fit.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/xterm-addon-web-links@0.8.0/lib/xterm-addon-web-links.min.js"></script>
+    <script>
+        // 解析URL参数
+        const urlParams = new URLSearchParams(window.location.search);
+        const terminalType = urlParams.get('type'); // 'container' 或 'host'
+        const containerId = urlParams.get('id');
+        const containerName = urlParams.get('name');
+        const hostName = urlParams.get('host');
+        
+        // 设置标题
+        const titleElement = document.getElementById('terminal-title');
+        if (terminalType === 'container' && containerName) {
+            titleElement.textContent = `容器终端: ${containerName}`;
+            document.title = `终端 - ${containerName}`;
+        } else if (terminalType === 'host' && hostName) {
+            titleElement.textContent = `宿主机终端: ${hostName}`;
+            document.title = `终端 - ${hostName}`;
+        }
+        
+        // 终端变量
+        let terminal;
+        let socket;
+        let fitAddon;
+        
+        // 初始化终端
+        function initTerminal() {
+            // 创建终端实例
+            terminal = new Terminal({
+                cursorBlink: true,
+                theme: {
+                    background: '#000000',
+                    foreground: '#ffffff'
+                },
+                fontSize: 14,
+                fontFamily: 'Menlo, Monaco, "Courier New", monospace',
+                scrollback: 1000
+            });
+            
+            // 创建终端自适应插件
+            fitAddon = new FitAddon.FitAddon();
+            terminal.loadAddon(fitAddon);
+            
+            // 添加链接支持
+            terminal.loadAddon(new WebLinksAddon.WebLinksAddon());
+            
+            // 打开终端
+            terminal.open(document.getElementById('terminal'));
+            fitAddon.fit();
+            
+            // 连接WebSocket
+            connectWebSocket();
+            
+            // 当窗口大小变化时调整终端大小
+            window.addEventListener('resize', () => {
+                if (terminal && fitAddon) {
+                    fitAddon.fit();
+                    
+                    // 向服务器发送窗口大小调整消息
+                    if (socket && socket.readyState === WebSocket.OPEN) {
+                        const dimensions = terminal.rows + ':' + terminal.cols;
+                        socket.send('rs:' + dimensions);
+                    }
+                }
+            });
+        }
+        
+        // 连接WebSocket
+        function connectWebSocket() {
+            const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+            let wsUrl;
+            
+            if (terminalType === 'container' && containerId) {
+                wsUrl = `${protocol}//${window.location.host}/api/terminal/${containerId}`;
+                terminal.writeln('正在连接到容器终端...');
+            } else if (terminalType === 'host') {
+                wsUrl = `${protocol}//${window.location.host}/api/host-terminal`;
+                terminal.writeln('正在连接到宿主机终端...');
+            } else {
+                terminal.writeln('错误: 无效的终端类型或ID');
+                return;
+            }
+            
+            try {
+                socket = new WebSocket(wsUrl);
+                
+                socket.onopen = () => {
+                    terminal.writeln('\r\n连接成功! 正在进入终端...\r\n');
+                    
+                    // 发送初始终端大小
+                    if (terminal.rows && terminal.cols) {
+                        const dimensions = terminal.rows + ':' + terminal.cols;
+                        socket.send('rs:' + dimensions);
+                    }
+                    
+                    // 处理键盘输入
+                    terminal.onData(data => {
+                        if (socket && socket.readyState === WebSocket.OPEN) {
+                            socket.send(data);
+                        }
+                    });
+                };
+                
+                socket.onmessage = (event) => {
+                    // 处理不同类型的消息数据
+                    if (event.data instanceof Blob) {
+                        // 二进制数据
+                        const reader = new FileReader();
+                        reader.onload = () => {
+                            const data = new Uint8Array(reader.result);
+                            terminal.write(data);
+                        };
+                        reader.readAsArrayBuffer(event.data);
+                    } else {
+                        // 文本数据
+                        terminal.write(event.data);
+                    }
+                };
+                
+                socket.onclose = () => {
+                    terminal.writeln('\r\n\r\n连接已关闭.');
+                };
+                
+                socket.onerror = (error) => {
+                    console.error('WebSocket错误:', error);
+                    terminal.writeln('\r\n\r\n连接出错');
+                };
+                
+            } catch (error) {
+                console.error('创建WebSocket连接失败:', error);
+                terminal.writeln('\r\n\r\n连接失败: ' + error.message);
+            }
+        }
+        
+        // 关闭终端
+        function closeTerminal() {
+            if (socket && socket.readyState === WebSocket.OPEN) {
+                // 先发送退出命令
+                socket.send('\x03\x04exit\r'); // Ctrl+C, Ctrl+D, exit命令
+                
+                // 给命令一点执行时间
+                setTimeout(() => {
+                    socket.close();
+                    window.close(); // 尝试关闭窗口
+                }, 500);
+            } else {
+                if (socket) {
+                    socket.close();
+                }
+                window.close(); // 尝试关闭窗口
+            }
+        }
+        
+        // 页面加载时初始化终端
+        window.addEventListener('load', initTerminal);
+        
+        // 处理页面关闭事件
+        window.addEventListener('beforeunload', () => {
+            if (socket && socket.readyState === WebSocket.OPEN) {
+                socket.send('\x03\x04exit\r'); // 尝试发送退出信号
+            }
+        });
+    </script>
+</body>
+</html> 

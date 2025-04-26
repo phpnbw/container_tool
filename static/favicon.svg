@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg width="32" height="32" viewBox="0 0 32 32" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <rect width="32" height="32" rx="4" fill="#1E88E5"/>
+  <g transform="translate(2, 4)">
+    <!-- 容器堆叠图形 -->
+    <rect x="4" y="12" width="9" height="6" rx="1" fill="white"/>
+    <rect x="4" y="5" width="9" height="6" rx="1" fill="white"/>
+    <rect x="14" y="12" width="9" height="6" rx="1" fill="white"/>
+    <rect x="14" y="5" width="9" height="6" rx="1" fill="white"/>
+    <rect x="9" y="18" width="9" height="6" rx="1" fill="white"/>
+    <!-- 编辑图标 -->
+    <path d="M22 2L24 4L17 11L15 9L22 2Z" fill="#FFCA28"/>
+    <path d="M15 9L14 12L17 11L15 9Z" fill="#FFCA28"/>
+  </g>
+</svg> 
